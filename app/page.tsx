@@ -1,13 +1,22 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import ChatMessage from "./components/ChatMessage";
+import ChatInput from "./components/ChatInput";
+import LoadingIndicator from "./components/LoadingIndicator";
+import Settings from "./components/Settings";
+import { useChatStorage } from "./hooks/useChatStorage";
+import { aiService } from "./services/aiService";
+import { validateMessage } from "./utils/validation";
 
 export default function Home() {
   const [message, setMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState<{ role: "user" | "assistant"; content: string }[]>([]);
   const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  const { chatHistory, addMessage, clearChat } = useChatStorage();
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -19,41 +28,42 @@ export default function Home() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!message.trim()) return;
+    
+    // Validate message
+    const validation = validateMessage(message);
+    if (!validation.isValid) {
+      setError(validation.error || "Invalid message");
+      return;
+    }
 
+    setError(null);
+    
     // Add user message to chat
-    const newMessage = { role: "user" as const, content: message };
-    setChatHistory(prev => [...prev, newMessage]);
+    const userMessage = { role: "user" as const, content: message };
+    addMessage(userMessage);
     setMessage("");
     setIsLoading(true);
 
     try {
-      const apiKey = process.env.NEXT_PUBLIC_GOOGLE_API_KEY;
+      const response = await aiService.generateResponse(message);
       
-      if (!apiKey) {
-        throw new Error('API key not found in environment variables');
+      if (response.success && response.content) {
+        const assistantMessage = { role: "assistant" as const, content: response.content };
+        addMessage(assistantMessage);
+      } else {
+        const errorMessage = { 
+          role: "assistant" as const, 
+          content: response.error || "Sorry, an error occurred while processing your request. Please try again." 
+        };
+        addMessage(errorMessage);
       }
-
-      // Initialize Google AI
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: "gemini-pro" });
-
-      // Start the chat conversation
-      const result = await model.generateContent(message);
-      const response = await result.response;
-      const text = response.text();
-
-      // Add AI response to chat
-      const assistantMessage = { role: "assistant" as const, content: text };
-      setChatHistory(prev => [...prev, assistantMessage]);
     } catch (error) {
       console.error('Error:', error);
-      // Add error message to chat
       const errorMessage = { 
         role: "assistant" as const, 
         content: "Sorry, an error occurred while processing your request. Please try again." 
       };
-      setChatHistory(prev => [...prev, errorMessage]);
+      addMessage(errorMessage);
     } finally {
       setIsLoading(false);
     }
@@ -64,6 +74,16 @@ export default function Home() {
       {/* Header */}
       <header className="flex items-center justify-between p-6 border-b dark:border-gray-700 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm">
         <h1 className="text-2xl font-bold bg-gradient-to-r from-blue-600 to-cyan-600 text-transparent bg-clip-text">AI Chat</h1>
+        <button
+          onClick={() => setIsSettingsOpen(true)}
+          className="p-2 text-gray-600 hover:text-gray-800 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
+          aria-label="Open settings"
+        >
+          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
       </header>
 
       {/* Chat Area */}
@@ -81,72 +101,41 @@ export default function Home() {
             </div>
           </div>
         )}
-        {chatHistory.length > 0 && (
-          <div className="flex justify-center mb-4">
-            <button
-              onClick={() => setChatHistory([])}
-              className="px-4 py-2 text-sm font-medium text-white bg-red-500 rounded-lg hover:bg-red-600 transition-colors duration-200 flex items-center gap-2"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-              </svg>
-              Clear Chat
-            </button>
-          </div>
-        )}
+
         {chatHistory.map((chat, index) => (
-          <div
-            key={index}
-            className={`flex ${chat.role === "user" ? "justify-end" : "justify-start"}`}
-          >
-            <div
-              className={`max-w-[80%] p-4 rounded-2xl ${
-                chat.role === "user"
-                  ? "bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-br-none transform hover:scale-[1.02] transition-transform"
-                  : "bg-white dark:bg-gray-800 text-gray-800 dark:text-white rounded-bl-none shadow-lg hover:shadow-xl transition-shadow"
-              }`}
-            >
-              {chat.content}
-            </div>
-          </div>
+          <ChatMessage 
+            key={index} 
+            role={chat.role} 
+            content={chat.content} 
+            timestamp={chat.timestamp}
+          />
         ))}
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="bg-white dark:bg-gray-800 p-4 rounded-2xl shadow-lg">
-              <div className="flex items-center gap-1">
-                {/* First dot */}
-                <div className="w-3 h-3 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full animate-bounce"></div>
-                {/* Second dot */}
-                <div className="w-3 h-3 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full animate-bounce [animation-delay:0.2s]"></div>
-                {/* Third dot */}
-                <div className="w-3 h-3 bg-gradient-to-r from-blue-500 to-cyan-500 rounded-full animate-bounce [animation-delay:0.4s]"></div>
-              </div>
-            </div>
-          </div>
-        )}
+        {isLoading && <LoadingIndicator />}
 
         <div ref={messagesEndRef} />
       </div>
 
-      {/* Input Area */}
-      <form onSubmit={handleSubmit} className="p-6 border-t dark:border-gray-700 bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm">
-        <div className="flex space-x-4 max-w-4xl mx-auto">
-          <input
-            type="text"
-            value={message}
-            onChange={(e) => setMessage(e.target.value)}
-            placeholder="Type your message here..."
-            className="flex-1 p-4 mr-2 mx-4 border rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 dark:bg-gray-700 dark:border-gray-600 dark:text-white transition-all duration-200 ease-in-out"
-          />
-          <button
-            type="submit"
-            disabled={!message.trim() || isLoading}
-            className="px-6  py-4 bg-gradient-to-r from-blue-500 to-cyan-500 text-white rounded-xl hover:opacity-90 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200 ease-in-out transform hover:scale-[1.02]"
-          >
-            Send
-          </button>
+      {/* Error Display */}
+      {error && (
+        <div className="px-6 py-2 bg-red-100 dark:bg-red-900/20 border-l-4 border-red-500 text-red-700 dark:text-red-400">
+          {error}
         </div>
-      </form>
+      )}
+
+      {/* Input Area */}
+      <ChatInput
+        message={message}
+        onMessageChange={setMessage}
+        onSubmit={handleSubmit}
+        isLoading={isLoading}
+      />
+
+      {/* Settings Modal */}
+      <Settings
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        onClearChat={clearChat}
+      />
     </div>
   );
 }
